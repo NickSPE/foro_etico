@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
+import MarkdownRenderer from '../components/MarkdownRenderer';
 import { useAuth, api } from '../context/AuthContext';
 import Sidebar from '../components/Sidebar';
 import { formatTimeAgo } from '../components/PostCard';
@@ -329,9 +330,20 @@ const PostDetail = () => {
               {post.titulo}
             </h1>
 
+            {/* Attached Image */}
+            {post.imagen && (
+              <div className="mb-6 border border-brand-border rounded-lg overflow-hidden bg-slate-50 max-h-[400px] flex items-center justify-center">
+                <img 
+                  src={post.imagen} 
+                  alt={post.titulo} 
+                  className="max-h-[400px] w-auto object-contain"
+                />
+              </div>
+            )}
+
             {/* Content Body */}
-            <div className="text-sm sm:text-base text-brand-dark text-opacity-95 leading-relaxed whitespace-pre-line mb-6 border-b border-brand-bg pb-6">
-              {post.contenido}
+            <div className="text-sm sm:text-base text-brand-dark text-opacity-95 leading-relaxed mb-6 border-b border-brand-bg pb-6">
+              <MarkdownRenderer text={post.contenido} />
             </div>
 
             {/* Post Stats */}

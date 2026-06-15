@@ -36,6 +36,7 @@ class Post(models.Model):
     es_bot = models.BooleanField(default=False)
     votos_positivos = models.IntegerField(default=0)
     votos_negativos = models.IntegerField(default=0)
+    imagen = models.FileField(upload_to='posts/', blank=True, null=True)
 
     class Meta:
         ordering = ['-fecha_creacion']

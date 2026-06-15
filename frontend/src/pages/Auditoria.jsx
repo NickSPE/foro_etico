@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api, useAuth } from '../context/AuthContext';
+import MarkdownRenderer from '../components/MarkdownRenderer';
 import {
   ShieldAlert, ShieldCheck, Play, ArrowLeft, ArrowRight, Loader2,
   Calendar, CheckCircle, AlertTriangle, AlertCircle, RefreshCw, Award, Printer, History, ExternalLink
@@ -861,9 +862,9 @@ const Auditoria = () => {
                   <ShieldCheck className="w-4 h-4" />
                   Análisis Cualitativo Semántico (Gemini IA)
                 </span>
-                <p className="text-xs text-slate-300 leading-relaxed font-medium mt-3 italic">
-                  "{selectedAudit.analisis_cualitativo_ia}"
-                </p>
+                <div className="text-xs text-slate-300 leading-relaxed font-medium mt-3 italic">
+                  <MarkdownRenderer text={selectedAudit.analisis_cualitativo_ia} isDark={true} />
+                </div>
               </div>
 
               {/* Risks breakdown list */}

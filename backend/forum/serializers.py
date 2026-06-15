@@ -63,7 +63,7 @@ class PostListSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'titulo', 'contenido', 'autor', 'categoria', 
             'fecha_creacion', 'es_bot', 'votos_positivos', 
-            'votos_negativos', 'total_votos', 'comentarios_count', 'user_vote'
+            'votos_negativos', 'total_votos', 'comentarios_count', 'user_vote', 'imagen'
         )
 
     def get_user_vote(self, obj):
@@ -87,7 +87,7 @@ class PostDetailSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'titulo', 'contenido', 'autor', 'categoria', 
             'fecha_creacion', 'es_bot', 'votos_positivos', 
-            'votos_negativos', 'total_votos', 'comentarios', 'user_vote'
+            'votos_negativos', 'total_votos', 'comentarios', 'user_vote', 'imagen'
         )
 
     def get_comentarios(self, obj):
@@ -108,7 +108,7 @@ class PostDetailSerializer(serializers.ModelSerializer):
 class PostCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Post
-        fields = ('id', 'titulo', 'contenido', 'categoria')
+        fields = ('id', 'titulo', 'contenido', 'categoria', 'imagen')
         read_only_fields = ('id',)
 
 class VoteSerializer(serializers.ModelSerializer):

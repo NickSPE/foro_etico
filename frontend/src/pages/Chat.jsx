@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth, api } from '../context/AuthContext';
 import { Link, useNavigate } from 'react-router-dom';
+import MarkdownRenderer from '../components/MarkdownRenderer';
 import { 
   Bot, Send, Sparkles, User, BrainCircuit, Key, CheckCircle, 
   XCircle, Globe, AlertTriangle, RefreshCw
@@ -236,6 +237,92 @@ const Chat = () => {
     setIsTyping(false);
   };
 
+  const handlePublishChat = () => {
+    if (!isAuthenticated) {
+      navigate('/login');
+      return;
+    }
+
+    const history = chatHistories[activeBot.id];
+    
+    // Filter out greeting messages and raw suggested choices to focus on the actual discussion
+    const cleanHistory = history.filter(msg => {
+      // Avoid bot greetings
+      if (msg.sender === 'bot' && (msg.text.includes('¡Hola!') || msg.text.includes('Bienvenido, humano'))) {
+        return false;
+      }
+      // Avoid short command-like suggestions or menu options to keep substance
+      if (msg.sender === 'user' && msg.text.length < 45 && (
+        msg.text.includes('Dilema') || 
+        msg.text.includes('Últimas') || 
+        msg.text.includes('Novedades') || 
+        msg.text.includes('hackeos') ||
+        msg.text.includes('Cifrado')
+      )) {
+        return false;
+      }
+      return true;
+    });
+
+    const cleanBotText = (text) => {
+      let cleaned = text.trim();
+      const paragraphs = cleaned.split(/\n\s*\n/);
+      
+      // Strip up to 2 conversational paragraphs from the start of the bot response
+      for (let i = 0; i < 2; i++) {
+        if (paragraphs.length > 1) {
+          const firstParagraph = paragraphs[0].toLowerCase();
+          if (
+            firstParagraph.includes('¡excelente!') ||
+            firstParagraph.includes('bienvenido') ||
+            firstParagraph.includes('hola') ||
+            firstParagraph.includes('soy u/bot') ||
+            firstParagraph.includes('soy bot') ||
+            firstParagraph.includes('anfitrión') ||
+            firstParagraph.includes('examinador ético') ||
+            firstParagraph.includes('las aguas de la moral') ||
+            firstParagraph.includes('aquí tienes el dilema') ||
+            firstParagraph.includes('te propongo') ||
+            firstParagraph.includes('escenario del auto') ||
+            firstParagraph.includes('escenario de')
+          ) {
+            paragraphs.shift();
+            cleaned = paragraphs.join('\n\n');
+          }
+        }
+      }
+      return cleaned.trim();
+    };
+
+    // Format the filtered main discussion items cleanly
+    const chatMarkdown = cleanHistory
+      .map(msg => {
+        if (msg.sender === 'bot') {
+          return cleanBotText(msg.text);
+        } else {
+          return `### Mi postura / reflexión:\n${msg.text}`;
+        }
+      })
+      .filter(text => text !== '')
+      .join('\n\n---\n\n');
+
+    // Find the core topic discussed
+    const firstSubstanceMsg = cleanHistory.find(m => m.sender === 'user')?.text || '';
+    const suggestedTitle = firstSubstanceMsg 
+      ? `Análisis de Dilema: ${firstSubstanceMsg.substring(0, 50)}${firstSubstanceMsg.length > 50 ? '...' : ''}`
+      : `Reflexión sobre Dilemas Tecnológicos - ${activeBot.name}`;
+
+    const targetCategorySlug = activeBot.id === 'news' ? 'ciberseguridad' : 'inteligencia-artificial';
+
+    navigate('/crear-post', {
+      state: {
+        titulo: suggestedTitle,
+        contenido: chatMarkdown,
+        categoriaSlug: targetCategorySlug
+      }
+    });
+  };
+
   const selectSuggested = (suggestedText) => {
     if (!isAuthenticated) {
       navigate('/login');
@@ -366,16 +453,27 @@ const Chat = () => {
             </div>
           </div>
 
-          {/* Gemini API toggle */}
-          {!hasBackendKey && (
-            <button
-              onClick={() => setShowKeyPanel(!showKeyPanel)}
-              className="flex items-center gap-1 px-3 py-1.5 border border-brand-border hover:bg-brand-bg rounded-md text-xs font-bold text-brand-lightText hover:text-brand-dark transition-all"
-            >
-              <Key className="w-3.5 h-3.5" />
-              <span>{apiKey ? 'Ajustes API Key' : 'Conectar Gemini'}</span>
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {chatHistories[activeBot.id].length > 1 && (
+              <button
+                onClick={handlePublishChat}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-orange text-white hover:bg-opacity-95 rounded-md text-xs font-black transition-all shadow-sm"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Publicar Debate</span>
+              </button>
+            )}
+
+            {!hasBackendKey && (
+              <button
+                onClick={() => setShowKeyPanel(!showKeyPanel)}
+                className="flex items-center gap-1 px-3 py-1.5 border border-brand-border hover:bg-brand-bg rounded-md text-xs font-bold text-brand-lightText hover:text-brand-dark transition-all"
+              >
+                <Key className="w-3.5 h-3.5" />
+                <span>{apiKey ? 'Ajustes API Key' : 'Conectar Gemini'}</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* API Key configuration panel */}
@@ -438,15 +536,13 @@ const Chat = () => {
                 
                 <div className="flex flex-col gap-0.5">
                   <div
-                    className={`p-3 rounded-2xl text-xs leading-relaxed font-semibold shadow-sm border whitespace-pre-wrap ${
+                    className={`p-3 rounded-2xl text-xs leading-relaxed font-semibold shadow-sm border ${
                       isBot
                         ? 'bg-white border-brand-border text-brand-dark rounded-tl-none'
                         : 'bg-brand-orange border-transparent text-white rounded-tr-none'
                     }`}
                   >
-                    {msg.text.split('\n').map((line, idx) => (
-                      <div key={idx} className="min-h-[1em]">{line}</div>
-                    ))}
+                    <MarkdownRenderer text={msg.text} isUser={!isBot} />
                   </div>
                   <span className="text-[9px] text-brand-lightText font-semibold mt-1 px-1 text-right">
                     {msg.time}

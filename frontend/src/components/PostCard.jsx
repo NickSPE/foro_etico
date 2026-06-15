@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth, api } from '../context/AuthContext';
-import { ArrowUp, ArrowDown, MessageSquare, Share2, Award, Bot, Clock } from 'lucide-react';
+import { ArrowUp, ArrowDown, MessageSquare, Share2, Award, Bot, Clock, Image } from 'lucide-react';
 
 // Elegant Spanish date humanizer
 export const formatTimeAgo = (dateString) => {
@@ -134,9 +134,20 @@ const PostCard = ({ post, onVoteSuccess }) => {
         </h2>
 
         {/* Content Preview */}
-        <p className="text-sm text-brand-dark text-opacity-90 leading-relaxed mb-3 line-clamp-3 whitespace-pre-line">
-          {post.contenido}
-        </p>
+        <div className="flex gap-4 items-start mb-3">
+          <p className="flex-1 text-sm text-brand-dark text-opacity-90 leading-relaxed line-clamp-3 whitespace-pre-line">
+            {post.contenido}
+          </p>
+          {post.imagen && (
+            <div className="w-20 h-20 sm:w-24 sm:h-24 rounded border border-brand-border overflow-hidden bg-slate-50 shrink-0 select-none">
+              <img 
+                src={post.imagen} 
+                alt="Post attachment" 
+                className="w-full h-full object-cover"
+              />
+            </div>
+          )}
+        </div>
 
         {/* Footer Actions */}
         <div className="flex items-center gap-4 text-xs font-semibold text-brand-lightText border-t border-brand-bg pt-2.5">
@@ -163,6 +174,13 @@ const PostCard = ({ post, onVoteSuccess }) => {
             <Award className="w-3.5 h-3.5" />
             Debate Abierto
           </span>
+
+          {post.imagen && (
+            <span className="hidden sm:flex items-center gap-1 text-[11px] font-normal text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">
+              <Image className="w-3.5 h-3.5" />
+              Imagen
+            </span>
+          )}
         </div>
       </div>
     </article>

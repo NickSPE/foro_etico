@@ -1,17 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { api, useAuth } from '../context/AuthContext';
 import Sidebar from '../components/Sidebar';
-import { AlertCircle, FileText, Send, Sparkles } from 'lucide-react';
+import { AlertCircle, FileText, Send, Sparkles, Image, X } from 'lucide-react';
 
 const CreatePost = () => {
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [categories, setCategories] = useState([]);
   const [titulo, setTitulo] = useState('');
   const [contenido, setContenido] = useState('');
   const [categoriaId, setCategoriaId] = useState('');
+  const [imagen, setImagen] = useState(null);
+  const [imagenPreview, setImagenPreview] = useState(null);
   
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -39,6 +42,18 @@ const CreatePost = () => {
     fetchCategories();
   }, []);
 
+  // Pre-populate fields from navigation state (when coming from Chat page)
+  useEffect(() => {
+    if (location.state) {
+      if (location.state.titulo) setTitulo(location.state.titulo);
+      if (location.state.contenido) setContenido(location.state.contenido);
+      if (location.state.categoriaSlug && categories.length > 0) {
+        const found = categories.find(c => c.slug === location.state.categoriaSlug);
+        if (found) setCategoriaId(found.id);
+      }
+    }
+  }, [location.state, categories]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
@@ -50,10 +65,18 @@ const CreatePost = () => {
 
     setLoading(true);
     try {
-      const response = await api.post('/posts/', {
-        titulo,
-        contenido,
-        categoria: categoriaId
+      const formData = new FormData();
+      formData.append('titulo', titulo);
+      formData.append('contenido', contenido);
+      formData.append('categoria', categoriaId);
+      if (imagen) {
+        formData.append('imagen', imagen);
+      }
+
+      const response = await api.post('/posts/', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
       });
       // Redirect to the post detail
       navigate(`/post/${response.data.id}`);
@@ -129,6 +152,54 @@ const CreatePost = () => {
                 className="w-full bg-slate-50 border border-brand-border rounded-md px-4 py-3 text-sm focus:outline-none focus:border-brand-blue focus:bg-white transition-all shadow-inner leading-relaxed text-brand-dark"
                 required
               ></textarea>
+            </div>
+
+            {/* Image Upload */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-bold text-brand-lightText uppercase">Imagen Adjunta (Opcional)</label>
+              
+              <div className="flex flex-col sm:flex-row items-center gap-4 p-4 border border-dashed border-brand-border rounded-md bg-slate-50">
+                {!imagenPreview ? (
+                  <label className="flex flex-col items-center justify-center gap-2 cursor-pointer w-full sm:w-48 h-32 border border-brand-border rounded-md bg-white hover:bg-slate-50 transition-all shrink-0">
+                    <Image className="w-8 h-8 text-brand-lightText" />
+                    <span className="text-[10px] font-bold text-brand-lightText uppercase tracking-wider">Seleccionar Imagen</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files[0];
+                        if (file) {
+                          setImagen(file);
+                          setImagenPreview(URL.createObjectURL(file));
+                        }
+                      }}
+                      className="hidden"
+                    />
+                  </label>
+                ) : (
+                  <div className="relative w-full sm:w-48 h-32 border border-brand-border rounded-md overflow-hidden bg-white shrink-0">
+                    <img src={imagenPreview} alt="Preview" className="w-full h-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setImagen(null);
+                        setImagenPreview(null);
+                      }}
+                      className="absolute top-1.5 right-1.5 bg-rose-600 hover:bg-rose-700 text-white p-1 rounded-full shadow-md transition-all animate-fade-in"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+                
+                <div className="text-left">
+                  <p className="text-xs text-brand-dark font-bold">Añade soporte visual a tu debate</p>
+                  <p className="text-[10px] text-brand-lightText mt-1 font-semibold leading-relaxed">
+                    Sube capturas de pantalla, esquemas de arquitectura o diagramas que enriquezcan tu análisis ético. 
+                    Formatos admitidos: JPG, PNG, WEBP. Máximo 5MB.
+                  </p>
+                </div>
+              </div>
             </div>
 
             {/* Actions */}

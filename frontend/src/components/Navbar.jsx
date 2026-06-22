@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Shield, LogOut, PlusSquare, Search, Bell, MessageSquare, ChevronDown, CircleUser } from 'lucide-react';
+import { Shield, LogOut, PlusSquare, Search, Bell, MessageSquare, ChevronDown, CircleUser, ShieldAlert } from 'lucide-react';
 
 const Navbar = () => {
   const { user, logout, isAuthenticated } = useAuth();
@@ -128,6 +128,14 @@ const Navbar = () => {
                     >
                       <MessageSquare className="w-4 h-4 text-brand-lightText" />
                       <span>Chat de Debate</span>
+                    </Link>
+                    <Link
+                      to="/auditoria"
+                      onClick={() => setDropdownOpen(false)}
+                      className="flex items-center gap-2 px-3 py-2 hover:bg-brand-bg transition-colors"
+                    >
+                      <ShieldAlert className="w-4 h-4 text-brand-lightText" />
+                      <span>Auditoría Ética</span>
                     </Link>
                     <div className="h-px bg-brand-bg my-1"></div>
                     <button

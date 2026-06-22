@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useParams, useLocation } from 'react-router-dom';
-import { api, useAuth } from '../context/AuthContext';
+import { supabase } from '../supabaseClient';
+import { useAuth } from '../context/AuthContext';
 import { 
   Home, TrendingUp, MessageSquare, Bell, CircleUser, PlusSquare, 
   EyeOff, Brain, Shield, Globe, Copyright, Info, List, ShieldAlert
@@ -24,8 +25,9 @@ const LeftSidebar = () => {
   useEffect(() => {
     const fetchCategories = async () => {
       try {
-        const response = await api.get('/categorias/');
-        setCategories(response.data);
+        const { data, error } = await supabase.from('categories').select('*');
+        if (error) throw error;
+        setCategories(data || []);
       } catch (error) {
         console.error('Error fetching categories:', error);
       } finally {
@@ -108,7 +110,7 @@ const LeftSidebar = () => {
       <div className="h-px bg-brand-border mx-2"></div>
 
       {/* User Actions Section */}
-      {isAuthenticated && (
+      {isAuthenticated && user && (
         <>
           <div className="flex flex-col gap-1">
             <span className="text-[10px] font-black text-brand-lightText uppercase tracking-widest pl-3 mb-2 block">

@@ -1,43 +1,82 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { api } from '../context/AuthContext';
+import { supabase } from '../supabaseClient';
+import { useAuth } from '../context/AuthContext';
 import PostCard from '../components/PostCard';
 import Sidebar from '../components/Sidebar';
 import { Award, Calendar, CircleUser, Newspaper } from 'lucide-react';
 
 const Profile = () => {
   const { username } = useParams();
+  const { user } = useAuth();
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [userKarma, setUserKarma] = useState(0);
   const [registrationDate, setRegistrationDate] = useState('Mayo 2026');
+  const [profileData, setProfileData] = useState(null);
 
   useEffect(() => {
     const fetchUserPosts = async () => {
       setLoading(true);
       try {
-        const response = await api.get('/posts/');
-        const allPosts = response.data; // Array unwrap handled by axios interceptor
-        
-        // Filter posts created by this user
-        const userFiltered = allPosts.filter(
-          (post) => post.autor && post.autor.username.toLowerCase() === username.toLowerCase()
-        );
-        setPosts(userFiltered);
+        // Get the profile for this username
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('username', username)
+          .single();
 
-        // Calculate Ethics Karma (net upvotes minus downvotes)
-        const totalKarma = userFiltered.reduce(
-          (acc, post) => acc + (post.votos_positivos - post.votos_negativos),
-          0
-        );
-        // Karma baseline of 1 + votes
-        setUserKarma(Math.max(1, 10 + totalKarma));
+        setProfileData(profile);
 
-        // Get registration date if present in first post or set default
-        if (userFiltered.length > 0 && userFiltered[0].autor.fecha_registro) {
-          const date = new Date(userFiltered[0].autor.fecha_registro);
+        if (!profile) { setLoading(false); return; }
+
+        if (profile.fecha_registro) {
+          const date = new Date(profile.fecha_registro);
           setRegistrationDate(date.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }));
         }
+
+        // Fetch posts by this user
+        const { data: postsData } = await supabase
+          .from('posts')
+          .select(`
+            *,
+            profiles:autor_id (id, username, avatar_url),
+            categories:categoria_id (id, nombre, slug, descripcion, icono),
+            comments:comments(count)
+          `)
+          .eq('autor_id', profile.id)
+          .order('fecha_creacion', { ascending: false });
+
+        const transformed = (postsData || []).map(post => ({
+          ...post,
+          autor: post.profiles ? { id: post.profiles.id, username: post.profiles.username, avatar: post.profiles.avatar_url } : null,
+          categoria: post.categories,
+          comentarios_count: post.comments?.[0]?.count || 0,
+          total_votos: post.votos_positivos - post.votos_negativos,
+          user_vote: null,
+        }));
+
+        // Resolve votes
+        if (user) {
+          const postIds = transformed.map(p => p.id);
+          if (postIds.length > 0) {
+            const { data: votes } = await supabase
+              .from('votes').select('post_id, tipo').eq('usuario_id', user.id).in('post_id', postIds);
+            if (votes) {
+              const voteMap = {};
+              votes.forEach(v => { voteMap[v.post_id] = v.tipo; });
+              transformed.forEach(p => { p.user_vote = voteMap[p.id] || null; });
+            }
+          }
+        }
+
+        setPosts(transformed);
+
+        // Calculate karma
+        const totalKarma = transformed.reduce(
+          (acc, post) => acc + (post.votos_positivos - post.votos_negativos), 0
+        );
+        setUserKarma(Math.max(1, 10 + totalKarma));
       } catch (error) {
         console.error('Error fetching profile posts:', error);
       } finally {
@@ -46,7 +85,7 @@ const Profile = () => {
     };
 
     fetchUserPosts();
-  }, [username]);
+  }, [username, user]);
 
   const handleVoteSuccessInList = (postId, pos, neg, total, userVote) => {
     setPosts(prevPosts =>
@@ -60,15 +99,12 @@ const Profile = () => {
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 flex flex-col lg:flex-row gap-6">
-      {/* Profile Info and Feed (Left) */}
       <div className="flex-1 flex flex-col gap-4">
-        {/* User Card Details */}
         <div className="bg-white border border-brand-border rounded-md shadow-sm p-6 flex flex-col sm:flex-row items-center gap-6 relative overflow-hidden">
-          {/* Decorative colored top accent */}
           <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-brand-orange to-brand-blue"></div>
           
           <img
-            src={`https://api.dicebear.com/7.x/bottts/svg?seed=${username}`}
+            src={profileData?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${username}`}
             alt={username}
             className="w-24 h-24 rounded-full border-2 border-brand-orange bg-brand-bg shrink-0 shadow-sm"
           />
@@ -94,7 +130,6 @@ const Profile = () => {
           </div>
         </div>
 
-        {/* User posts list */}
         {loading ? (
           <div className="flex flex-col gap-4 animate-pulse">
             {[1, 2].map((i) => (
@@ -113,17 +148,12 @@ const Profile = () => {
               Aportes y debates de u/{username} ({posts.length})
             </span>
             {posts.map((post) => (
-              <PostCard
-                key={post.id}
-                post={post}
-                onVoteSuccess={handleVoteSuccessInList}
-              />
+              <PostCard key={post.id} post={post} onVoteSuccess={handleVoteSuccessInList} />
             ))}
           </div>
         )}
       </div>
 
-      {/* Sidebar (Right) */}
       <Sidebar />
     </div>
   );

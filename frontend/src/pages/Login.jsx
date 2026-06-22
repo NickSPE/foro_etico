@@ -7,7 +7,7 @@ const Login = () => {
   const { login, loading } = useAuth();
   const navigate = useNavigate();
 
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
 
@@ -15,12 +15,12 @@ const Login = () => {
     e.preventDefault();
     setError(null);
     
-    if (!username.trim() || !password.trim()) {
+    if (!email.trim() || !password.trim()) {
       setError('Por favor completa todos los campos.');
       return;
     }
 
-    const result = await login(username, password);
+    const result = await login(email, password);
     if (result.success) {
       navigate('/');
     } else {
@@ -54,12 +54,12 @@ const Login = () => {
         {/* Form */}
         <form onSubmit={handleSubmit} className="w-full flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold text-brand-lightText uppercase">Usuario</label>
+            <label className="text-xs font-bold text-brand-lightText uppercase">Email</label>
             <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="Ingresa tu nombre de usuario"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="correo@ejemplo.com"
               className="w-full bg-slate-50 border border-brand-border rounded-md px-3.5 py-2 text-sm focus:outline-none focus:border-brand-blue focus:bg-white transition-all shadow-inner"
               required
             />

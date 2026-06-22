@@ -1,83 +1,85 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
-import axios from 'axios';
+import { supabase } from '../supabaseClient';
 
 const AuthContext = createContext(null);
 
-export const API_URL = 'http://127.0.0.1:8000/api';
-
-// Create custom axios instance for the application
-export const api = axios.create({
-  baseURL: API_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  }
-});
-
-// Response interceptor to unwrap DRF paginated responses
-api.interceptors.response.use(
-  (response) => {
-    if (response.data && typeof response.data === 'object' && Array.isArray(response.data.results)) {
-      response.data = response.data.results;
-    }
-    return response;
-  },
-  (error) => {
-    return Promise.reject(error);
-  }
-);
-
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-  // Set up interceptor to inject Authorization header if token exists in memory
+  // Helper to build public user object from Supabase session + profile
+  const buildUserObject = async (supabaseUser) => {
+    if (!supabaseUser) return null;
+    
+    // Fetch the public profile (username, avatar)
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('username, avatar_url, fecha_registro')
+      .eq('id', supabaseUser.id)
+      .single();
+
+    return {
+      id: supabaseUser.id,
+      email: supabaseUser.email,
+      username: profile?.username || supabaseUser.user_metadata?.username || 'usuario',
+      avatar: profile?.avatar_url || supabaseUser.user_metadata?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${supabaseUser.id}`,
+      fecha_registro: profile?.fecha_registro || supabaseUser.created_at
+    };
+  };
+
+  // Listen for auth state changes (login, logout, token refresh, page reload)
   useEffect(() => {
-    const requestInterceptor = api.interceptors.request.use(
-      (config) => {
-        if (token) {
-          config.headers.Authorization = `Bearer ${token}`;
+    // Get initial session
+    supabase.auth.getSession().then(async ({ data: { session: currentSession } }) => {
+      setSession(currentSession);
+      if (currentSession?.user) {
+        const userObj = await buildUserObject(currentSession.user);
+        setUser(userObj);
+      }
+      setLoading(false);
+    });
+
+    // Subscribe to auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, currentSession) => {
+        setSession(currentSession);
+        if (currentSession?.user) {
+          const userObj = await buildUserObject(currentSession.user);
+          setUser(userObj);
+        } else {
+          setUser(null);
         }
-        return config;
-      },
-      (error) => {
-        return Promise.reject(error);
+        setLoading(false);
       }
     );
 
-    return () => {
-      api.interceptors.request.eject(requestInterceptor);
-    };
-  }, [token]);
+    return () => subscription.unsubscribe();
+  }, []);
 
-  const login = async (username, password) => {
+  const login = async (email, password) => {
     setLoading(true);
     try {
-      const response = await api.post('/auth/login/', { username, password });
-      const { access } = response.data;
-      setToken(access);
-      
-      // Decoded payload from JWT (we can get username/user_id from JWT or fetch user details)
-      // For simplicity and richness, let's fetch profile/user info or decode the token
-      // Let's decode token payload
-      const base64Url = access.split('.')[1];
-      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-      const payload = JSON.parse(window.atob(base64));
-      
-      // Setup simple user object
-      const loggedUser = {
-        id: payload.user_id,
-        username: username,
-        avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${username}`
-      };
-      
-      setUser(loggedUser);
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        setLoading(false);
+        return { success: false, error: error.message === 'Invalid login credentials' 
+          ? 'Credenciales inválidas. Verifica tu email y contraseña.' 
+          : error.message };
+      }
+
+      const userObj = await buildUserObject(data.user);
+      setUser(userObj);
+      setSession(data.session);
       setLoading(false);
       return { success: true };
     } catch (error) {
       setLoading(false);
-      const errorMsg = error.response?.data?.detail || 'Credenciales inválidas o error de conexión.';
-      return { success: false, error: errorMsg };
+      return { success: false, error: 'Error de conexión. Inténtalo de nuevo.' };
     }
   };
 
@@ -85,34 +87,51 @@ export const AuthProvider = ({ children }) => {
     setLoading(true);
     try {
       const avatar = avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${username}`;
-      await api.post('/auth/register/', {
-        username,
+      
+      const { data, error } = await supabase.auth.signUp({
         email,
         password,
-        avatar
+        options: {
+          data: {
+            username: username,
+            avatar_url: avatar,
+          }
+        }
       });
+
+      if (error) {
+        setLoading(false);
+        let errorMsg = error.message;
+        if (error.message.includes('already registered')) {
+          errorMsg = 'Este correo electrónico ya está registrado.';
+        }
+        return { success: false, error: errorMsg };
+      }
+
       setLoading(false);
       return { success: true };
     } catch (error) {
       setLoading(false);
-      let errorMsg = 'Error en el registro.';
-      if (error.response?.data) {
-        const errors = error.response.data;
-        if (errors.username) errorMsg = `Usuario: ${errors.username[0]}`;
-        else if (errors.email) errorMsg = `Email: ${errors.email[0]}`;
-        else if (errors.password) errorMsg = `Contraseña: ${errors.password[0]}`;
-      }
-      return { success: false, error: errorMsg };
+      return { success: false, error: 'Error en el registro. Inténtalo de nuevo.' };
     }
   };
 
-  const logout = () => {
-    setToken(null);
+  const logout = async () => {
+    await supabase.auth.signOut();
     setUser(null);
+    setSession(null);
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout, isAuthenticated: !!token }}>
+    <AuthContext.Provider value={{ 
+      user, 
+      session, 
+      loading, 
+      login, 
+      register, 
+      logout, 
+      isAuthenticated: !!session 
+    }}>
       {children}
     </AuthContext.Provider>
   );

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api } from '../context/AuthContext';
+import { supabase } from '../supabaseClient';
+import { useAuth } from '../context/AuthContext';
 import PostCard from '../components/PostCard';
 import Sidebar from '../components/Sidebar';
 import { Search as SearchIcon, Newspaper } from 'lucide-react';
@@ -8,6 +9,7 @@ import { Search as SearchIcon, Newspaper } from 'lucide-react';
 const Search = () => {
   const [searchParams] = useSearchParams();
   const query = searchParams.get('q') || '';
+  const { user } = useAuth();
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -15,21 +17,47 @@ const Search = () => {
     const fetchAndFilterPosts = async () => {
       setLoading(true);
       try {
-        const response = await api.get('/posts/');
-        const allPosts = response.data; // Already unwrapped array due to our response interceptor!
-        
-        if (query.trim() === '') {
-          setPosts(allPosts);
-        } else {
-          const lowerQuery = query.toLowerCase();
-          const filtered = allPosts.filter(
-            (post) =>
-              post.titulo.toLowerCase().includes(lowerQuery) ||
-              post.contenido.toLowerCase().includes(lowerQuery) ||
-              (post.categoria && post.categoria.nombre.toLowerCase().includes(lowerQuery))
-          );
-          setPosts(filtered);
+        let supaQuery = supabase
+          .from('posts')
+          .select(`
+            *,
+            profiles:autor_id (id, username, avatar_url),
+            categories:categoria_id (id, nombre, slug, descripcion, icono),
+            comments:comments(count)
+          `)
+          .order('fecha_creacion', { ascending: false });
+
+        // Use ilike for server-side search if query exists
+        if (query.trim()) {
+          supaQuery = supaQuery.or(`titulo.ilike.%${query}%,contenido.ilike.%${query}%`);
         }
+
+        const { data, error } = await supaQuery;
+        if (error) throw error;
+
+        const transformed = (data || []).map(post => ({
+          ...post,
+          autor: post.profiles ? { id: post.profiles.id, username: post.profiles.username, avatar: post.profiles.avatar_url } : null,
+          categoria: post.categories,
+          comentarios_count: post.comments?.[0]?.count || 0,
+          total_votos: post.votos_positivos - post.votos_negativos,
+          user_vote: null,
+        }));
+
+        if (user) {
+          const postIds = transformed.map(p => p.id);
+          if (postIds.length > 0) {
+            const { data: votes } = await supabase
+              .from('votes').select('post_id, tipo').eq('usuario_id', user.id).in('post_id', postIds);
+            if (votes) {
+              const voteMap = {};
+              votes.forEach(v => { voteMap[v.post_id] = v.tipo; });
+              transformed.forEach(p => { p.user_vote = voteMap[p.id] || null; });
+            }
+          }
+        }
+
+        setPosts(transformed);
       } catch (error) {
         console.error('Error searching posts:', error);
       } finally {
@@ -38,7 +66,7 @@ const Search = () => {
     };
 
     fetchAndFilterPosts();
-  }, [query]);
+  }, [query, user]);
 
   const handleVoteSuccessInList = (postId, pos, neg, total, userVote) => {
     setPosts(prevPosts =>
@@ -52,9 +80,7 @@ const Search = () => {
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 flex flex-col lg:flex-row gap-6">
-      {/* Search Feed (Left) */}
       <div className="flex-1 flex flex-col gap-4">
-        {/* Results Banner */}
         <div className="bg-white border border-brand-border rounded-md p-6 shadow-sm flex items-center gap-4">
           <div className="bg-brand-bg p-3 rounded-full text-brand-orange">
             <SearchIcon className="w-6 h-6" />
@@ -71,7 +97,6 @@ const Search = () => {
           </div>
         </div>
 
-        {/* Feed List */}
         {loading ? (
           <div className="flex flex-col gap-4 animate-pulse">
             {[1, 2, 3].map((i) => (
@@ -90,17 +115,12 @@ const Search = () => {
               Debates encontrados ({posts.length})
             </span>
             {posts.map((post) => (
-              <PostCard
-                key={post.id}
-                post={post}
-                onVoteSuccess={handleVoteSuccessInList}
-              />
+              <PostCard key={post.id} post={post} onVoteSuccess={handleVoteSuccessInList} />
             ))}
           </div>
         )}
       </div>
 
-      {/* Sidebar (Right) */}
       <Sidebar />
     </div>
   );

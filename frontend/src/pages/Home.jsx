@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { api } from '../context/AuthContext';
+import { supabase } from '../supabaseClient';
+import { useAuth } from '../context/AuthContext';
 import PostCard from '../components/PostCard';
 import Sidebar from '../components/Sidebar';
 import { Sparkles, MessageSquare, TrendingUp, Calendar } from 'lucide-react';
 
 const Home = () => {
+  const { user } = useAuth();
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy] = useState('recent'); // 'recent' or 'popular'
@@ -12,9 +14,51 @@ const Home = () => {
   const fetchPosts = async () => {
     setLoading(true);
     try {
-      const orderingParam = sortBy === 'popular' ? 'popular' : '';
-      const response = await api.get(`/posts/?ordering=${orderingParam}`);
-      setPosts(response.data);
+      let query = supabase
+        .from('posts')
+        .select(`
+          *,
+          profiles:autor_id (id, username, avatar_url),
+          categories:categoria_id (id, nombre, slug, descripcion, icono),
+          comments:comments(count)
+        `);
+
+      if (sortBy === 'popular') {
+        query = query.order('votos_positivos', { ascending: false });
+      } else {
+        query = query.order('fecha_creacion', { ascending: false });
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      // Transform data to match the shape the UI expects
+      const transformed = (data || []).map(post => ({
+        ...post,
+        autor: post.profiles ? { id: post.profiles.id, username: post.profiles.username, avatar: post.profiles.avatar_url } : null,
+        categoria: post.categories,
+        comentarios_count: post.comments?.[0]?.count || 0,
+        total_votos: post.votos_positivos - post.votos_negativos,
+        user_vote: null, // Will be resolved below
+      }));
+
+      // Resolve user votes if authenticated
+      if (user) {
+        const postIds = transformed.map(p => p.id);
+        const { data: votes } = await supabase
+          .from('votes')
+          .select('post_id, tipo')
+          .eq('usuario_id', user.id)
+          .in('post_id', postIds);
+
+        if (votes) {
+          const voteMap = {};
+          votes.forEach(v => { voteMap[v.post_id] = v.tipo; });
+          transformed.forEach(p => { p.user_vote = voteMap[p.id] || null; });
+        }
+      }
+
+      setPosts(transformed);
     } catch (error) {
       console.error('Error fetching posts:', error);
     } finally {
@@ -24,7 +68,7 @@ const Home = () => {
 
   useEffect(() => {
     fetchPosts();
-  }, [sortBy]);
+  }, [sortBy, user]);
 
   const handleVoteSuccessInList = (postId, pos, neg, total, userVote) => {
     setPosts(prevPosts =>

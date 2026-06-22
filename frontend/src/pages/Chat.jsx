@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useAuth, api } from '../context/AuthContext';
+import { useAuth } from '../context/AuthContext';
+import { supabase } from '../supabaseClient';
 import { Link, useNavigate } from 'react-router-dom';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 import { 
@@ -11,7 +12,6 @@ const Chat = () => {
   const { user, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   
-  // Custom mock/fallback conversations (kept in case API key is empty)
   const bots = [
     {
       id: 'news',
@@ -43,30 +43,16 @@ const Chat = () => {
   const [isTyping, setIsTyping] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [showKeyPanel, setShowKeyPanel] = useState(true);
-  const [hasBackendKey, setHasBackendKey] = useState(false);
   const chatEndRef = useRef(null);
 
-  // Load API key from localStorage on mount & check backend key status
+  // Load API key from localStorage or env var on mount
   useEffect(() => {
-    const savedKey = localStorage.getItem('gemini_api_key') || '';
+    const envKey = import.meta.env.VITE_GEMINI_API_KEY || '';
+    const savedKey = localStorage.getItem('gemini_api_key') || envKey;
     setApiKey(savedKey);
     if (savedKey) {
       setShowKeyPanel(false);
     }
-
-    // Ping backend to check if it has a global key configured
-    const checkBackendKey = async () => {
-      try {
-        const res = await api.post('/chat/', { bot_id: 'news', message: 'ping_backend_key_check' });
-        if (res.data && res.data.status === 'api_key_configured') {
-          setHasBackendKey(true);
-          setShowKeyPanel(false); // Hide manual key panel if backend is already fully configured!
-        }
-      } catch (err) {
-        console.log("Backend key check failed, relying on frontend key/mock:", err);
-      }
-    };
-    checkBackendKey();
   }, []);
 
   useEffect(() => {
@@ -85,20 +71,79 @@ const Chat = () => {
     setShowKeyPanel(true);
   };
 
+  // Bot auto-publish: Create a post directly in Supabase
   const [triggeringBot, setTriggeringBot] = useState(false);
   const [triggerMessage, setTriggerMessage] = useState('');
 
   const handleTriggerBot = async (botType) => {
     setTriggeringBot(true);
     setTriggerMessage('');
+    
+    const currentApiKey = apiKey.trim() || import.meta.env.VITE_GEMINI_API_KEY || '';
+    
+    if (!currentApiKey) {
+      setTriggerMessage('❌ Necesitas una API Key de Gemini configurada para que los bots publiquen contenido.');
+      setTriggeringBot(false);
+      return;
+    }
+
     try {
-      const res = await api.post('/bots/trigger/', { bot_type: botType });
-      if (res.data && res.data.message) {
-        setTriggerMessage(res.data.message);
-      }
+      const isNews = botType === 'news';
+      const prompt = isNews 
+        ? 'Genera una noticia real y reciente sobre ética tecnológica, privacidad digital o ciberseguridad. Formato: primero el título en una línea, luego dos saltos de línea, luego el cuerpo del artículo con análisis ético. Usa markdown. Mínimo 3 párrafos.'
+        : 'Genera un dilema ético tecnológico original y desafiante. Formato: primero el título del dilema en una línea, luego dos saltos de línea, luego la descripción detallada del escenario y al final una pregunta directa para el lector. Usa markdown. Mínimo 3 párrafos.';
+
+      const systemInstr = isNews 
+        ? 'Eres un periodista especializado en ética digital. Genera contenido original basado en tendencias reales. Responde directamente con el artículo, sin preámbulos conversacionales.'
+        : 'Eres un filósofo experto en dilemas éticos de la tecnología. Genera dilemas originales y desafiantes. Responde directamente con el dilema, sin preámbulos conversacionales.';
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${currentApiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            systemInstruction: { parts: [{ text: systemInstr }] },
+            tools: [{ googleSearch: {} }]
+          })
+        }
+      );
+
+      if (!response.ok) throw new Error('Error de Gemini API');
+      const data = await response.json();
+      const generatedText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      
+      if (!generatedText) throw new Error('Respuesta vacía de Gemini');
+
+      // Split title and content
+      const lines = generatedText.trim().split('\n');
+      let titulo = lines[0].replace(/^#+\s*/, '').replace(/^\*+/, '').replace(/\*+$/, '').trim();
+      const contenido = lines.slice(1).join('\n').trim();
+
+      if (titulo.length > 100) titulo = titulo.substring(0, 97) + '...';
+
+      // Get the target category
+      const targetSlug = isNews ? 'ciberseguridad' : 'inteligencia-artificial';
+      const { data: catData } = await supabase.from('categories').select('id').eq('slug', targetSlug).single();
+      
+      if (!catData) throw new Error('Categoría no encontrada');
+
+      // Insert the post as a bot post (no author)
+      const { error: insertError } = await supabase.from('posts').insert({
+        titulo,
+        contenido: contenido || generatedText,
+        categoria_id: catData.id,
+        autor_id: null,
+        es_bot: true,
+      });
+
+      if (insertError) throw insertError;
+
+      setTriggerMessage(`✅ ¡${isNews ? 'Bot Noticias' : 'Bot Dilemas'} ha publicado exitosamente! Revisa el feed para ver la nueva publicación.`);
     } catch (err) {
-      console.error(err);
-      alert('Error al forzar la publicación del bot.');
+      console.error('Error triggering bot:', err);
+      setTriggerMessage(`❌ Error: ${err.message}`);
     } finally {
       setTriggeringBot(false);
     }
@@ -123,53 +168,27 @@ const Chat = () => {
     }
   };
 
-  // Call the Gemini API with search grounding!
+  // Call the Gemini API with search grounding
   const callGeminiApi = async (bot, userMsg) => {
+    const currentApiKey = apiKey.trim() || import.meta.env.VITE_GEMINI_API_KEY || '';
     try {
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey.trim()}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${currentApiKey}`,
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: userMsg
-                  }
-                ]
-              }
-            ],
-            systemInstruction: {
-              parts: [
-                {
-                  text: bot.systemInstruction
-                }
-              ]
-            },
-            tools: [
-              {
-                googleSearch: {} // Native Search Grounding enabled!
-              }
-            ]
+            contents: [{ parts: [{ text: userMsg }] }],
+            systemInstruction: { parts: [{ text: bot.systemInstruction }] },
+            tools: [{ googleSearch: {} }]
           })
         }
       );
 
-      if (!response.ok) {
-        throw new Error('Respuesta de API inválida');
-      }
-
+      if (!response.ok) throw new Error('Respuesta de API inválida');
       const data = await response.json();
       const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      
-      if (!text) {
-        throw new Error('Formato de respuesta vacío');
-      }
-
+      if (!text) throw new Error('Formato de respuesta vacío');
       return text;
     } catch (error) {
       console.error('Error calling Gemini API:', error);
@@ -184,7 +203,6 @@ const Chat = () => {
 
     const timeString = new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
     
-    // 1. Add User Message
     const userMsg = { sender: 'user', text: currentInput, time: timeString };
     setChatHistories(prev => ({
       ...prev,
@@ -195,38 +213,13 @@ const Chat = () => {
     setIsTyping(true);
 
     let responseText = '';
+    const currentApiKey = apiKey.trim() || import.meta.env.VITE_GEMINI_API_KEY || '';
     
-    try {
-      // 1. Try secure backend proxy first
-      const backendRes = await api.post('/chat/', {
-        bot_id: activeBot.id,
-        message: currentInput
-      });
-      
-      if (backendRes.data && backendRes.data.response) {
-        responseText = backendRes.data.response;
-      } else if (backendRes.data && backendRes.data.error === 'api_key_not_configured') {
-        // 2. Fallback to client-side Gemini if backend has no key configured
-        if (apiKey.trim()) {
-          responseText = await callGeminiApi(activeBot, currentInput);
-        } else {
-          // 3. Simulated fallback
-          await new Promise(resolve => setTimeout(resolve, 800));
-          responseText = getSimulatedResponse(activeBot.id, currentInput);
-        }
-      } else {
-        throw new Error("Respuesta inválida del servidor");
-      }
-    } catch (err) {
-      console.log("Backend proxy failed or not set up, trying local fallback:", err);
-      // 2. Fallback to client-side Gemini
-      if (apiKey.trim()) {
-        responseText = await callGeminiApi(activeBot, currentInput);
-      } else {
-        // 3. Simulated fallback
-        await new Promise(resolve => setTimeout(resolve, 800));
-        responseText = getSimulatedResponse(activeBot.id, currentInput);
-      }
+    if (currentApiKey) {
+      responseText = await callGeminiApi(activeBot, currentInput);
+    } else {
+      await new Promise(resolve => setTimeout(resolve, 800));
+      responseText = getSimulatedResponse(activeBot.id, currentInput);
     }
 
     setChatHistories(prev => ({
@@ -238,54 +231,29 @@ const Chat = () => {
   };
 
   const handlePublishChat = () => {
-    if (!isAuthenticated) {
-      navigate('/login');
-      return;
-    }
+    if (!isAuthenticated) { navigate('/login'); return; }
 
     const history = chatHistories[activeBot.id];
-    
-    // Filter out greeting messages and raw suggested choices to focus on the actual discussion
     const cleanHistory = history.filter(msg => {
-      // Avoid bot greetings
-      if (msg.sender === 'bot' && (msg.text.includes('¡Hola!') || msg.text.includes('Bienvenido, humano'))) {
-        return false;
-      }
-      // Avoid short command-like suggestions or menu options to keep substance
+      if (msg.sender === 'bot' && (msg.text.includes('¡Hola!') || msg.text.includes('Bienvenido, humano'))) return false;
       if (msg.sender === 'user' && msg.text.length < 45 && (
-        msg.text.includes('Dilema') || 
-        msg.text.includes('Últimas') || 
-        msg.text.includes('Novedades') || 
-        msg.text.includes('hackeos') ||
-        msg.text.includes('Cifrado')
-      )) {
-        return false;
-      }
+        msg.text.includes('Dilema') || msg.text.includes('Últimas') || 
+        msg.text.includes('Novedades') || msg.text.includes('hackeos') || msg.text.includes('Cifrado')
+      )) return false;
       return true;
     });
 
     const cleanBotText = (text) => {
       let cleaned = text.trim();
       const paragraphs = cleaned.split(/\n\s*\n/);
-      
-      // Strip up to 2 conversational paragraphs from the start of the bot response
       for (let i = 0; i < 2; i++) {
         if (paragraphs.length > 1) {
-          const firstParagraph = paragraphs[0].toLowerCase();
-          if (
-            firstParagraph.includes('¡excelente!') ||
-            firstParagraph.includes('bienvenido') ||
-            firstParagraph.includes('hola') ||
-            firstParagraph.includes('soy u/bot') ||
-            firstParagraph.includes('soy bot') ||
-            firstParagraph.includes('anfitrión') ||
-            firstParagraph.includes('examinador ético') ||
-            firstParagraph.includes('las aguas de la moral') ||
-            firstParagraph.includes('aquí tienes el dilema') ||
-            firstParagraph.includes('te propongo') ||
-            firstParagraph.includes('escenario del auto') ||
-            firstParagraph.includes('escenario de')
-          ) {
+          const fp = paragraphs[0].toLowerCase();
+          if (fp.includes('¡excelente!') || fp.includes('bienvenido') || fp.includes('hola') || 
+              fp.includes('soy u/bot') || fp.includes('soy bot') || fp.includes('anfitrión') || 
+              fp.includes('examinador ético') || fp.includes('las aguas de la moral') || 
+              fp.includes('aquí tienes el dilema') || fp.includes('te propongo') || 
+              fp.includes('escenario del auto') || fp.includes('escenario de')) {
             paragraphs.shift();
             cleaned = paragraphs.join('\n\n');
           }
@@ -294,42 +262,26 @@ const Chat = () => {
       return cleaned.trim();
     };
 
-    // Format the filtered main discussion items cleanly
     const chatMarkdown = cleanHistory
-      .map(msg => {
-        if (msg.sender === 'bot') {
-          return cleanBotText(msg.text);
-        } else {
-          return `### Mi postura / reflexión:\n${msg.text}`;
-        }
-      })
+      .map(msg => msg.sender === 'bot' ? cleanBotText(msg.text) : `### Mi postura / reflexión:\n${msg.text}`)
       .filter(text => text !== '')
       .join('\n\n---\n\n');
 
-    // Find the core topic discussed
     const firstSubstanceMsg = cleanHistory.find(m => m.sender === 'user')?.text || '';
     const suggestedTitle = firstSubstanceMsg 
       ? `Análisis de Dilema: ${firstSubstanceMsg.substring(0, 50)}${firstSubstanceMsg.length > 50 ? '...' : ''}`
       : `Reflexión sobre Dilemas Tecnológicos - ${activeBot.name}`;
 
     const targetCategorySlug = activeBot.id === 'news' ? 'ciberseguridad' : 'inteligencia-artificial';
-
-    navigate('/crear-post', {
-      state: {
-        titulo: suggestedTitle,
-        contenido: chatMarkdown,
-        categoriaSlug: targetCategorySlug
-      }
-    });
+    navigate('/crear-post', { state: { titulo: suggestedTitle, contenido: chatMarkdown, categoriaSlug: targetCategorySlug } });
   };
 
   const selectSuggested = (suggestedText) => {
-    if (!isAuthenticated) {
-      navigate('/login');
-      return;
-    }
+    if (!isAuthenticated) { navigate('/login'); return; }
     setInputs(prev => ({ ...prev, [activeBot.id]: suggestedText }));
   };
+
+  const hasKey = !!(apiKey.trim() || import.meta.env.VITE_GEMINI_API_KEY);
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 flex flex-col md:flex-row gap-6 h-[calc(100vh-80px)]">
@@ -351,19 +303,13 @@ const Chat = () => {
                   isSelected ? 'bg-brand-bg border-brand-orange' : 'border-transparent'
                 }`}
               >
-                <img
-                  src={b.avatar}
-                  alt={b.name}
-                  className="w-10 h-10 rounded-full border border-brand-border shrink-0 bg-slate-50"
-                />
+                <img src={b.avatar} alt={b.name} className="w-10 h-10 rounded-full border border-brand-border shrink-0 bg-slate-50" />
                 <div className="min-w-0">
                   <div className="text-xs font-bold text-brand-dark flex items-center justify-between">
                     <span>{b.name}</span>
                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
                   </div>
-                  <p className="text-[10.5px] text-brand-lightText font-semibold mt-0.5 truncate leading-snug">
-                    {b.description}
-                  </p>
+                  <p className="text-[10.5px] text-brand-lightText font-semibold mt-0.5 truncate leading-snug">{b.description}</p>
                 </div>
               </button>
             );
@@ -372,20 +318,12 @@ const Chat = () => {
         
         {/* Connection status card */}
         <div className="bg-brand-bg rounded-md p-3 border border-brand-border text-center text-xs font-bold">
-          {hasBackendKey ? (
+          {hasKey ? (
             <div className="text-emerald-600 flex flex-col items-center gap-1">
               <CheckCircle className="w-5 h-5 text-emerald-500" />
-              <span>Conexión de Servidor</span>
+              <span>Conexión Activa</span>
               <span className="text-[9px] bg-emerald-100 px-2 py-0.5 rounded-full uppercase tracking-wider text-emerald-800 flex items-center gap-1 font-black">
-                <Globe className="w-2.5 h-2.5" /> Gemini Activo Global
-              </span>
-            </div>
-          ) : apiKey ? (
-            <div className="text-emerald-600 flex flex-col items-center gap-1">
-              <CheckCircle className="w-5 h-5 text-emerald-500" />
-              <span>Conexión Personal</span>
-              <span className="text-[9px] bg-emerald-100 px-2 py-0.5 rounded-full uppercase tracking-wider text-emerald-800 flex items-center gap-1 font-black">
-                <Globe className="w-2.5 h-2.5" /> Gemini Activo Personal
+                <Globe className="w-2.5 h-2.5" /> Gemini Activo
               </span>
             </div>
           ) : (
@@ -397,28 +335,22 @@ const Chat = () => {
           )}
         </div>
 
-        {/* Planificador autónomo de bots */}
+        {/* Bot auto-publish */}
         <div className="bg-white rounded-md p-3.5 border border-brand-border flex flex-col gap-2 shadow-sm">
           <span className="text-[10px] font-black text-brand-dark uppercase tracking-wider flex items-center gap-1">
             <Sparkles className="w-3.5 h-3.5 text-brand-orange animate-pulse" />
             Publicación Autónoma
           </span>
           <p className="text-[9.5px] text-brand-lightText font-semibold leading-relaxed">
-            ¿Quieres ver si los bots pueden publicar solos? Haz clic abajo para forzar al servidor a publicar un hilo completo de inmediato en el foro.
+            Fuerza a los bots a publicar un hilo completo de inmediato en el foro usando IA.
           </p>
           <div className="flex flex-col gap-1.5 mt-1">
-            <button
-              onClick={() => handleTriggerBot('news')}
-              disabled={triggeringBot}
-              className="w-full bg-brand-orange text-white text-[9.5px] font-black py-2 px-3 rounded hover:bg-opacity-90 disabled:opacity-50 transition-all flex items-center justify-center gap-1"
-            >
+            <button onClick={() => handleTriggerBot('news')} disabled={triggeringBot}
+              className="w-full bg-brand-orange text-white text-[9.5px] font-black py-2 px-3 rounded hover:bg-opacity-90 disabled:opacity-50 transition-all flex items-center justify-center gap-1">
               {triggeringBot ? 'Publicando...' : 'Bot Noticias: Publicar Ahora'}
             </button>
-            <button
-              onClick={() => handleTriggerBot('dilemma')}
-              disabled={triggeringBot}
-              className="w-full bg-brand-dark text-white text-[9.5px] font-black py-2 px-3 rounded hover:bg-opacity-90 disabled:opacity-50 transition-all flex items-center justify-center gap-1"
-            >
+            <button onClick={() => handleTriggerBot('dilemma')} disabled={triggeringBot}
+              className="w-full bg-brand-dark text-white text-[9.5px] font-black py-2 px-3 rounded hover:bg-opacity-90 disabled:opacity-50 transition-all flex items-center justify-center gap-1">
               {triggeringBot ? 'Publicando...' : 'Bot Dilemas: Publicar Ahora'}
             </button>
           </div>
@@ -435,49 +367,30 @@ const Chat = () => {
         {/* Chat Header */}
         <div className="border-b border-brand-border p-4 bg-slate-50 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <img
-              src={activeBot.avatar}
-              alt={activeBot.name}
-              className="w-10 h-10 rounded-full border border-brand-border bg-white"
-            />
+            <img src={activeBot.avatar} alt={activeBot.name} className="w-10 h-10 rounded-full border border-brand-border bg-white" />
             <div>
               <span className="text-sm font-bold text-brand-dark flex items-center gap-1.5">
                 {activeBot.name}
-                <span className="text-[9px] bg-brand-orange/15 text-brand-orange font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
-                  Agente AI
-                </span>
+                <span className="text-[9px] bg-brand-orange/15 text-brand-orange font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">Agente AI</span>
               </span>
-              <p className="text-[10px] text-brand-lightText font-semibold mt-0.5">
-                {activeBot.description}
-              </p>
+              <p className="text-[10px] text-brand-lightText font-semibold mt-0.5">{activeBot.description}</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             {chatHistories[activeBot.id].length > 1 && (
-              <button
-                onClick={handlePublishChat}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-orange text-white hover:bg-opacity-95 rounded-md text-xs font-black transition-all shadow-sm"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Publicar Debate</span>
+              <button onClick={handlePublishChat} className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-orange text-white hover:bg-opacity-95 rounded-md text-xs font-black transition-all shadow-sm">
+                <Sparkles className="w-3.5 h-3.5" /> <span>Publicar Debate</span>
               </button>
             )}
-
-            {!hasBackendKey && (
-              <button
-                onClick={() => setShowKeyPanel(!showKeyPanel)}
-                className="flex items-center gap-1 px-3 py-1.5 border border-brand-border hover:bg-brand-bg rounded-md text-xs font-bold text-brand-lightText hover:text-brand-dark transition-all"
-              >
-                <Key className="w-3.5 h-3.5" />
-                <span>{apiKey ? 'Ajustes API Key' : 'Conectar Gemini'}</span>
-              </button>
-            )}
+            <button onClick={() => setShowKeyPanel(!showKeyPanel)} className="flex items-center gap-1 px-3 py-1.5 border border-brand-border hover:bg-brand-bg rounded-md text-xs font-bold text-brand-lightText hover:text-brand-dark transition-all">
+              <Key className="w-3.5 h-3.5" /> <span>{hasKey ? 'Ajustes API Key' : 'Conectar Gemini'}</span>
+            </button>
           </div>
         </div>
 
         {/* API Key configuration panel */}
-        {!hasBackendKey && showKeyPanel && (
+        {showKeyPanel && (
           <div className="bg-orange-50/70 border-b border-brand-border p-4 transition-all">
             <h3 className="text-xs font-bold text-brand-dark mb-1.5 flex items-center gap-1.5">
               <Sparkles className="w-4 h-4 text-brand-orange" />
@@ -494,20 +407,9 @@ const Chat = () => {
                 placeholder="Pega tu API Key de Gemini aquí (AIzaSy...)"
                 className="flex-1 bg-white border border-brand-border focus:border-brand-orange rounded-md px-3.5 py-2 text-xs font-semibold outline-none"
               />
-              <button
-                type="submit"
-                className="bg-brand-orange hover:bg-opacity-95 text-white font-bold text-xs px-4 py-2 rounded-md transition-all"
-              >
-                Guardar
-              </button>
+              <button type="submit" className="bg-brand-orange hover:bg-opacity-95 text-white font-bold text-xs px-4 py-2 rounded-md transition-all">Guardar</button>
               {localStorage.getItem('gemini_api_key') && (
-                <button
-                  type="button"
-                  onClick={handleClearApiKey}
-                  className="bg-red-500 hover:bg-red-600 text-white font-bold text-xs px-4 py-2 rounded-md transition-all"
-                >
-                  Desconectar
-                </button>
+                <button type="button" onClick={handleClearApiKey} className="bg-red-500 hover:bg-red-600 text-white font-bold text-xs px-4 py-2 rounded-md transition-all">Desconectar</button>
               )}
             </form>
           </div>
@@ -518,41 +420,20 @@ const Chat = () => {
           {chatHistories[activeBot.id].map((msg, index) => {
             const isBot = msg.sender === 'bot';
             return (
-              <div
-                key={index}
-                className={`flex gap-3 max-w-[85%] ${isBot ? 'self-start' : 'self-end flex-row-reverse'}`}
-              >
-                <div
-                  className={`w-7.5 h-7.5 rounded-full border shrink-0 flex items-center justify-center ${
-                    isBot ? 'bg-white border-brand-border' : 'bg-brand-orange border-transparent text-white'
-                  }`}
-                >
-                  {isBot ? (
-                    <Bot className="w-4 h-4 text-brand-orange" />
-                  ) : (
-                    <User className="w-4 h-4" />
-                  )}
+              <div key={index} className={`flex gap-3 max-w-[85%] ${isBot ? 'self-start' : 'self-end flex-row-reverse'}`}>
+                <div className={`w-7.5 h-7.5 rounded-full border shrink-0 flex items-center justify-center ${isBot ? 'bg-white border-brand-border' : 'bg-brand-orange border-transparent text-white'}`}>
+                  {isBot ? <Bot className="w-4 h-4 text-brand-orange" /> : <User className="w-4 h-4" />}
                 </div>
-                
                 <div className="flex flex-col gap-0.5">
-                  <div
-                    className={`p-3 rounded-2xl text-xs leading-relaxed font-semibold shadow-sm border ${
-                      isBot
-                        ? 'bg-white border-brand-border text-brand-dark rounded-tl-none'
-                        : 'bg-brand-orange border-transparent text-white rounded-tr-none'
-                    }`}
-                  >
+                  <div className={`p-3 rounded-2xl text-xs leading-relaxed font-semibold shadow-sm border ${isBot ? 'bg-white border-brand-border text-brand-dark rounded-tl-none' : 'bg-brand-orange border-transparent text-white rounded-tr-none'}`}>
                     <MarkdownRenderer text={msg.text} isUser={!isBot} />
                   </div>
-                  <span className="text-[9px] text-brand-lightText font-semibold mt-1 px-1 text-right">
-                    {msg.time}
-                  </span>
+                  <span className="text-[9px] text-brand-lightText font-semibold mt-1 px-1 text-right">{msg.time}</span>
                 </div>
               </div>
             );
           })}
           
-          {/* Thinking Animation */}
           {isTyping && (
             <div className="flex gap-3 max-w-[80%] self-start animate-pulse">
               <div className="w-7.5 h-7.5 rounded-full border bg-white border-brand-border flex items-center justify-center shrink-0">
@@ -562,7 +443,7 @@ const Chat = () => {
                 <div className="p-3 rounded-2xl rounded-tl-none bg-white border border-brand-border shadow-sm flex items-center gap-2">
                   <RefreshCw className="w-3.5 h-3.5 text-brand-orange animate-spin" />
                   <span className="text-xs text-brand-lightText font-bold">
-                    {apiKey ? 'Pensando y buscando en internet...' : 'Analizando ética de la respuesta...'}
+                    {hasKey ? 'Pensando y buscando en internet...' : 'Analizando ética de la respuesta...'}
                   </span>
                 </div>
               </div>
@@ -571,18 +452,13 @@ const Chat = () => {
           <div ref={chatEndRef} />
         </div>
 
-        {/* Suggested inputs overlay */}
+        {/* Suggested inputs */}
         <div className="p-3 border-t border-brand-bg bg-white flex flex-wrap gap-2">
           <span className="text-[10px] font-black text-brand-lightText shrink-0 flex items-center gap-1 self-center uppercase tracking-wider">
-            <Sparkles className="w-3.5 h-3.5 text-brand-orange" />
-            Sugerido:
+            <Sparkles className="w-3.5 h-3.5 text-brand-orange" /> Sugerido:
           </span>
           {activeBot.suggested.map((s, i) => (
-            <button
-              key={i}
-              onClick={() => selectSuggested(s)}
-              className="text-[10.5px] font-semibold text-brand-orange hover:text-brand-orange/80 bg-orange-50 hover:bg-orange-100 border border-orange-100 px-3 py-1 rounded-full transition-all"
-            >
+            <button key={i} onClick={() => selectSuggested(s)} className="text-[10.5px] font-semibold text-brand-orange hover:text-brand-orange/80 bg-orange-50 hover:bg-orange-100 border border-orange-100 px-3 py-1 rounded-full transition-all">
               {s}
             </button>
           ))}
@@ -598,24 +474,14 @@ const Chat = () => {
               placeholder={`Escribe un mensaje a ${activeBot.name}...`}
               className="flex-1 bg-brand-bg hover:bg-slate-100 focus:bg-white border border-transparent focus:border-brand-orange rounded-full px-4.5 py-2.5 text-xs font-semibold outline-none transition-all placeholder:text-brand-lightText"
             />
-            <button
-              type="submit"
-              className="bg-brand-orange hover:bg-opacity-95 text-white p-2.5 rounded-full transition-all shadow-sm shrink-0 flex items-center justify-center"
-            >
+            <button type="submit" className="bg-brand-orange hover:bg-opacity-95 text-white p-2.5 rounded-full transition-all shadow-sm shrink-0 flex items-center justify-center">
               <Send className="w-4.5 h-4.5" />
             </button>
           </form>
         ) : (
           <div className="p-4 border-t border-brand-border bg-slate-50 flex items-center justify-between gap-4">
-            <span className="text-xs font-bold text-brand-lightText">
-              Regístrate o inicia sesión para chatear con los bots de moderación.
-            </span>
-            <Link
-              to="/login"
-              className="bg-brand-orange hover:bg-opacity-95 text-white text-xs font-black px-4.5 py-2 rounded-full transition-all shrink-0 shadow-sm"
-            >
-              Iniciar Sesión
-            </Link>
+            <span className="text-xs font-bold text-brand-lightText">Regístrate o inicia sesión para chatear con los bots de moderación.</span>
+            <Link to="/login" className="bg-brand-orange hover:bg-opacity-95 text-white text-xs font-black px-4.5 py-2 rounded-full transition-all shrink-0 shadow-sm">Iniciar Sesión</Link>
           </div>
         )}
       </div>

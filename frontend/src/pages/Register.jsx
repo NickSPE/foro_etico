@@ -100,7 +100,7 @@ const Register = () => {
             <input
               type="text"
               value={username}
-              onChange={(e) => setUsername(e.target.value.replace(/\s+/g, ''))} // No spaces in username
+              onChange={(e) => setUsername(e.target.value.replace(/\s+/g, ''))}
               placeholder="Ej: socratesDigital"
               className="w-full bg-slate-50 border border-brand-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-brand-blue focus:bg-white transition-all shadow-inner"
               maxLength={20}

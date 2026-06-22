@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth, api } from '../context/AuthContext';
+import { useAuth } from '../context/AuthContext';
+import { supabase } from '../supabaseClient';
 import { ArrowUp, ArrowDown, MessageSquare, Share2, Award, Bot, Clock, Image } from 'lucide-react';
 
 // Elegant Spanish date humanizer
@@ -41,14 +42,48 @@ const PostCard = ({ post, onVoteSuccess }) => {
     setVoting(true);
 
     try {
-      const response = await api.post(`/posts/${post.id}/votar/`, { tipo });
-      const data = response.data;
-      
-      setLocalVote(data.tipo);
-      setLocalTotalVotos(data.total_votos);
+      // Check if vote already exists
+      const { data: existingVote } = await supabase
+        .from('votes')
+        .select('*')
+        .eq('usuario_id', user.id)
+        .eq('post_id', post.id)
+        .single();
+
+      let newVote = null;
+
+      if (existingVote) {
+        if (existingVote.tipo === tipo) {
+          // Toggle: same vote → remove
+          await supabase.from('votes').delete().eq('id', existingVote.id);
+          newVote = null;
+        } else {
+          // Change vote type
+          await supabase.from('votes').update({ tipo }).eq('id', existingVote.id);
+          newVote = tipo;
+        }
+      } else {
+        // Create new vote
+        await supabase.from('votes').insert({ usuario_id: user.id, post_id: post.id, tipo });
+        newVote = tipo;
+      }
+
+      // Re-fetch updated vote counts from post (trigger recalculated them)
+      const { data: updatedPost } = await supabase
+        .from('posts')
+        .select('votos_positivos, votos_negativos')
+        .eq('id', post.id)
+        .single();
+
+      const pos = updatedPost?.votos_positivos || 0;
+      const neg = updatedPost?.votos_negativos || 0;
+      const total = pos - neg;
+
+      setLocalVote(newVote);
+      setLocalTotalVotos(total);
       
       if (onVoteSuccess) {
-        onVoteSuccess(post.id, data.votos_positivos, data.votos_negativos, data.total_votos, data.tipo);
+        onVoteSuccess(post.id, pos, neg, total, newVote);
       }
     } catch (error) {
       console.error('Error voting:', error);
@@ -138,10 +173,10 @@ const PostCard = ({ post, onVoteSuccess }) => {
           <p className="flex-1 text-sm text-brand-dark text-opacity-90 leading-relaxed line-clamp-3 whitespace-pre-line">
             {post.contenido}
           </p>
-          {post.imagen && (
+          {post.imagen_url && (
             <div className="w-20 h-20 sm:w-24 sm:h-24 rounded border border-brand-border overflow-hidden bg-slate-50 shrink-0 select-none">
               <img 
-                src={post.imagen} 
+                src={post.imagen_url} 
                 alt="Post attachment" 
                 className="w-full h-full object-cover"
               />
@@ -175,7 +210,7 @@ const PostCard = ({ post, onVoteSuccess }) => {
             Debate Abierto
           </span>
 
-          {post.imagen && (
+          {post.imagen_url && (
             <span className="hidden sm:flex items-center gap-1 text-[11px] font-normal text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">
               <Image className="w-3.5 h-3.5" />
               Imagen

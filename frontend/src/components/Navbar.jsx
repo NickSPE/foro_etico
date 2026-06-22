@@ -39,7 +39,7 @@ const Navbar = () => {
 
       {/* Right Actions */}
       <div className="flex items-center gap-3 shrink-0">
-        {isAuthenticated ? (
+        {isAuthenticated && user ? (
           <>
             {/* Direct quick action buttons */}
             <div className="flex items-center gap-1">
